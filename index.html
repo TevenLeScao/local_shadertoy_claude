@@ -6,6 +6,7 @@
     <title>Local Shadertoy</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <style>
         * {
             margin: 0;
@@ -205,6 +206,88 @@
             cursor: not-allowed;
             opacity: 0.6;
         }
+
+        /* Terminal Panel */
+        .terminal-resize-handle {
+            height: 5px;
+            background: #333;
+            cursor: row-resize;
+            flex-shrink: 0;
+        }
+
+        .terminal-resize-handle:hover {
+            background: #0e639c;
+        }
+
+        .terminal-panel {
+            height: 200px;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            border-top: 1px solid #333;
+            flex-shrink: 0;
+        }
+
+        .terminal-panel.hidden {
+            display: none;
+        }
+
+        .terminal-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 10px;
+            background: #252526;
+            font-size: 12px;
+            color: #888;
+            flex-shrink: 0;
+        }
+
+        .terminal-toolbar button {
+            padding: 2px 8px;
+            background: #333;
+            border: 1px solid #444;
+            color: #ccc;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .terminal-toolbar button:hover {
+            background: #444;
+        }
+
+        .terminal-status {
+            margin-left: auto;
+            font-size: 11px;
+        }
+
+        .terminal-status.connected { color: #00ff88; }
+        .terminal-status.disconnected { color: #ff8800; }
+
+        #terminal {
+            flex: 1;
+            background: #1e1e1e;
+            overflow: hidden;
+        }
+
+        /* Auto-save indicator */
+        .save-status {
+            font-size: 11px;
+            color: #888;
+            margin-left: 10px;
+        }
+        .save-status.saving { color: #ff8800; }
+        .save-status.saved { color: #00ff88; }
+
+        /* File indicator */
+        .file-indicator {
+            font-size: 11px;
+            color: #888;
+            padding: 2px 6px;
+            background: #333;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
@@ -226,6 +309,8 @@
                     <button id="pushToProdBtn" disabled>Push to Prod</button>
                     <span id="prodStatus" class="prod-status">Disconnected</span>
                 </div>
+                <span id="fileIndicator" class="file-indicator"></span>
+                <span id="saveStatus" class="save-status"></span>
                 <div class="stats">
                     <span id="fpsDisplay">FPS: 0</span> |
                     <span id="timeDisplay">Time: 0.00s</span> |
@@ -237,6 +322,16 @@
                 <textarea id="shaderCode"></textarea>
             </div>
             <div class="error-panel" id="errorPanel"></div>
+            <div class="terminal-resize-handle" id="terminalResizeHandle"></div>
+            <div class="terminal-panel" id="terminalPanel">
+                <div class="terminal-toolbar">
+                    <span>Terminal</span>
+                    <button id="terminalToggleBtn">Hide</button>
+                    <button id="terminalClearBtn">Clear</button>
+                    <span id="terminalStatus" class="terminal-status disconnected">Disconnected</span>
+                </div>
+                <div id="terminal"></div>
+            </div>
         </div>
         <div class="resize-handle" id="resizeHandle"></div>
         <div class="preview-panel" id="previewPanel">
@@ -249,6 +344,8 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script>
         // Example shaders
         const EXAMPLES = {
@@ -932,11 +1029,276 @@ void main() {
             }
         });
 
-        // Initialize
-        updateProdStatus(false);
-        setupGeometry();
-        compileUserShader(editor.getValue());
-        render();
+        // ==================== Auto-Save to Disk ====================
+        const LIVE_FILE = new URLSearchParams(location.search).get('file') || 'live.glsl';
+        let autoSaveEnabled = true;
+        let lastSavedContent = '';
+        let ignoreNextFileChange = false;
+
+        // Update file indicator
+        document.getElementById('fileIndicator').textContent = LIVE_FILE;
+
+        function showSaveStatus(status) {
+            const el = document.getElementById('saveStatus');
+            if (status === 'saving') {
+                el.textContent = 'Saving...';
+                el.className = 'save-status saving';
+            } else if (status === 'saved') {
+                el.textContent = 'Saved';
+                el.className = 'save-status saved';
+                setTimeout(() => { el.textContent = ''; el.className = 'save-status'; }, 1500);
+            }
+        }
+
+        async function saveToFile(code) {
+            if (!autoSaveEnabled || code === lastSavedContent) return;
+            ignoreNextFileChange = true;
+            showSaveStatus('saving');
+
+            try {
+                const res = await fetch('/api/shader/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: LIVE_FILE, content: code})
+                });
+                if (res.ok) {
+                    lastSavedContent = code;
+                    showSaveStatus('saved');
+                }
+            } catch (e) {
+                console.error('Auto-save failed:', e);
+            }
+        }
+
+        async function loadFromFileIfExists() {
+            try {
+                const res = await fetch(`/api/shader?name=${encodeURIComponent(LIVE_FILE)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    editor.setValue(data.content);
+                    lastSavedContent = data.content;
+                    compileUserShader(data.content);
+                    return true;
+                }
+            } catch (e) {}
+            // File doesn't exist - save current content
+            await saveToFile(editor.getValue());
+            return false;
+        }
+
+        // Hook auto-save into editor changes (in addition to existing compile)
+        const originalOnChange = editor.getOption('onUpdate');
+        editor.on('change', () => {
+            // Auto-save is handled in the existing debounce timeout
+        });
+
+        // Modify the existing compile timeout to also save
+        const origCompileTimeout = compileTimeout;
+
+        // ==================== SSE for External File Changes ====================
+        let editorEventSource = null;
+
+        function connectEditorSSE() {
+            editorEventSource = new EventSource('/api/events');
+
+            editorEventSource.addEventListener('reload', async (e) => {
+                const data = JSON.parse(e.data);
+                if (data.shader === LIVE_FILE && !ignoreNextFileChange) {
+                    // External change detected - reload from file
+                    try {
+                        const res = await fetch(`/api/shader?name=${encodeURIComponent(LIVE_FILE)}`);
+                        if (res.ok) {
+                            const fileData = await res.json();
+                            if (fileData.content !== editor.getValue()) {
+                                // Save cursor position
+                                const cursor = editor.getCursor();
+                                editor.setValue(fileData.content);
+                                editor.setCursor(cursor);
+                                lastSavedContent = fileData.content;
+                                compileUserShader(fileData.content);
+                                console.log('Reloaded from disk');
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to reload:', e);
+                    }
+                }
+                ignoreNextFileChange = false;
+            });
+
+            editorEventSource.onerror = () => {
+                setTimeout(connectEditorSSE, 2000);
+            };
+        }
+
+        // ==================== Terminal Integration ====================
+        let terminal = null;
+        let terminalSocket = null;
+        let fitAddon = null;
+
+        function updateTerminalStatus(connected) {
+            const el = document.getElementById('terminalStatus');
+            if (connected) {
+                el.textContent = 'Connected';
+                el.className = 'terminal-status connected';
+            } else {
+                el.textContent = 'Disconnected';
+                el.className = 'terminal-status disconnected';
+            }
+        }
+
+        function initTerminal() {
+            terminal = new Terminal({
+                cursorBlink: true,
+                fontSize: 13,
+                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                theme: {
+                    background: '#1e1e1e',
+                    foreground: '#cccccc',
+                    cursor: '#ffffff'
+                }
+            });
+
+            fitAddon = new FitAddon.FitAddon();
+            terminal.loadAddon(fitAddon);
+            terminal.open(document.getElementById('terminal'));
+
+            // Fit after a short delay to ensure container is sized
+            setTimeout(() => fitAddon.fit(), 100);
+
+            connectTerminalWebSocket();
+        }
+
+        function connectTerminalWebSocket() {
+            const wsPort = 8081; // WebSocket terminal port
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            terminalSocket = new WebSocket(`${protocol}//${location.hostname}:${wsPort}`);
+
+            terminalSocket.onopen = () => {
+                updateTerminalStatus(true);
+                terminal.write('\x1b[32mTerminal connected\x1b[0m\r\n');
+                // Send initial size
+                terminalSocket.send(JSON.stringify({
+                    type: 'resize',
+                    cols: terminal.cols,
+                    rows: terminal.rows
+                }));
+            };
+
+            terminalSocket.onmessage = (event) => {
+                terminal.write(event.data);
+            };
+
+            terminalSocket.onclose = () => {
+                updateTerminalStatus(false);
+                terminal.write('\r\n\x1b[31mTerminal disconnected\x1b[0m\r\n');
+                // Reconnect after delay
+                setTimeout(connectTerminalWebSocket, 3000);
+            };
+
+            terminalSocket.onerror = () => {
+                updateTerminalStatus(false);
+            };
+
+            terminal.onData((data) => {
+                if (terminalSocket.readyState === WebSocket.OPEN) {
+                    terminalSocket.send(JSON.stringify({type: 'input', data: data}));
+                }
+            });
+
+            terminal.onResize(({cols, rows}) => {
+                if (terminalSocket.readyState === WebSocket.OPEN) {
+                    terminalSocket.send(JSON.stringify({type: 'resize', cols, rows}));
+                }
+            });
+        }
+
+        // Terminal toolbar buttons
+        document.getElementById('terminalToggleBtn').addEventListener('click', () => {
+            const panel = document.getElementById('terminalPanel');
+            const btn = document.getElementById('terminalToggleBtn');
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+                btn.textContent = 'Hide';
+                setTimeout(() => fitAddon && fitAddon.fit(), 100);
+            } else {
+                panel.classList.add('hidden');
+                btn.textContent = 'Show';
+            }
+            editor.refresh();
+        });
+
+        document.getElementById('terminalClearBtn').addEventListener('click', () => {
+            terminal && terminal.clear();
+        });
+
+        // Terminal resize handle
+        const terminalResizeHandle = document.getElementById('terminalResizeHandle');
+        let isResizingTerminal = false;
+
+        terminalResizeHandle.addEventListener('mousedown', (e) => {
+            isResizingTerminal = true;
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizingTerminal) return;
+
+            const editorPanel = document.getElementById('editorPanel');
+            const terminalPanel = document.getElementById('terminalPanel');
+            const panelRect = editorPanel.getBoundingClientRect();
+
+            const terminalHeight = panelRect.bottom - e.clientY;
+            if (terminalHeight > 80 && terminalHeight < panelRect.height - 200) {
+                terminalPanel.style.height = `${terminalHeight}px`;
+                editor.refresh();
+                fitAddon && fitAddon.fit();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isResizingTerminal = false;
+        });
+
+        // Patch the editor change handler to include auto-save
+        const origChangeHandler = editor._handlers.change;
+        editor.on('change', () => {
+            clearTimeout(compileTimeout);
+            compileTimeout = setTimeout(() => {
+                const code = editor.getValue();
+                compileUserShader(code);
+                saveToFile(code);
+            }, 500);
+        });
+
+        // ==================== Initialize ====================
+        async function init() {
+            setupGeometry();
+            updateProdStatus(false);
+
+            // Try to load from file first (if server is running)
+            const loadedFromFile = await loadFromFileIfExists();
+
+            // If no file, use localStorage or default
+            if (!loadedFromFile) {
+                const savedCode = localStorage.getItem('shadertoy_code');
+                if (savedCode) {
+                    editor.setValue(savedCode);
+                }
+                compileUserShader(editor.getValue());
+            }
+
+            // Connect SSE for file change notifications
+            connectEditorSSE();
+
+            // Initialize terminal
+            initTerminal();
+
+            // Start render loop
+            render();
+        }
+
+        init();
     </script>
 </body>
 </html>
