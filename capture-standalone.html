@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shader Capture</title>
+    <style>
+        body { margin: 0; background: #111; color: #fff; font-family: monospace; }
+        #status { padding: 10px; background: #222; }
+        canvas { display: block; margin: 10px; border: 1px solid #333; }
+        .captures { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px; }
+        .capture { text-align: center; }
+        .capture img { max-width: 300px; border: 1px solid #444; }
+        .capture a { color: #0af; }
+    </style>
+</head>
+<body>
+    <div id="status">Loading shader...</div>
+    <canvas id="c" width="1280" height="720"></canvas>
+    <div class="captures" id="captures"></div>
+
+    <script>
+const SHADER_FILE = 'shaders/gare_de_lest.glsl';
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+const isWebGL2 = gl instanceof WebGL2RenderingContext;
+const status = document.getElementById('status');
+const capturesDiv = document.getElementById('captures');
+
+if (!gl) {
+    status.textContent = 'WebGL not available!';
+    throw new Error('No WebGL');
+}
+
+console.log('WebGL version:', isWebGL2 ? 'WebGL2' : 'WebGL1');
+
+const vs = isWebGL2 ? `#version 300 es
+in vec4 a_position;
+void main() { gl_Position = a_position; }` : `
+attribute vec4 a_position;
+void main() { gl_Position = a_position; }`;
+
+function wrapShader(code) {
+    if (isWebGL2) {
+        return `#version 300 es
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+out vec4 outColor;
+${code}
+void main() { mainImage(outColor, gl_FragCoord.xy); }`;
+    } else {
+        return `
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+${code}
+void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }`;
+    }
+}
+
+function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        const err = gl.getShaderInfoLog(s);
+        status.textContent = 'Shader error: ' + err;
+        console.error(err);
+        throw new Error(err);
+    }
+    return s;
+}
+
+let prog, iRes, iTime;
+
+function setupProgram(shaderCode) {
+    const fs = wrapShader(shaderCode);
+
+    prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+    }
+
+    gl.useProgram(prog);
+
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+    const pos = gl.getAttribLocation(prog, 'a_position');
+    gl.enableVertexAttribArray(pos);
+    gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
+
+    iRes = gl.getUniformLocation(prog, 'iResolution');
+    iTime = gl.getUniformLocation(prog, 'iTime');
+}
+
+function renderAt(time) {
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform3f(iRes, canvas.width, canvas.height, 1);
+    gl.uniform1f(iTime, time);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+
+const times = [0, 1, 2, 3, 4];
+const captured = [];
+
+async function captureAll() {
+    status.textContent = 'Capturing frames...';
+
+    for (const t of times) {
+        renderAt(t);
+        gl.finish();
+
+        const dataUrl = canvas.toDataURL('image/png');
+        captured.push({ time: t, data: dataUrl });
+
+        const div = document.createElement('div');
+        div.className = 'capture';
+        div.innerHTML = `
+            <div>t = ${t}s</div>
+            <img src="${dataUrl}">
+            <div><a href="${dataUrl}" download="gare_t${t}.png">Download</a></div>
+        `;
+        capturesDiv.appendChild(div);
+
+        status.textContent = `Captured t=${t}s`;
+        await new Promise(r => setTimeout(r, 50));
+    }
+
+    status.textContent = `Done! ${captured.length} frames captured.`;
+    window.capturedFrames = captured;
+    console.log('Captured frames:', captured.map(c => ({ time: c.time, size: c.data.length })));
+}
+
+async function loadShader() {
+    try {
+        const res = await fetch(SHADER_FILE);
+        if (!res.ok) throw new Error(`Failed to load ${SHADER_FILE}`);
+        return await res.text();
+    } catch (e) {
+        status.textContent = 'Error loading shader: ' + e.message;
+        throw e;
+    }
+}
+
+let animStart = 0;
+function animate() {
+    const t = (performance.now() - animStart) / 1000;
+    renderAt(t % 10);
+    requestAnimationFrame(animate);
+}
+
+async function main() {
+    status.textContent = 'Loading shader...';
+    const shaderCode = await loadShader();
+    status.textContent = 'Compiling shader...';
+    setupProgram(shaderCode);
+    await captureAll();
+    animStart = performance.now();
+    animate();
+}
+
+main().catch(e => {
+    console.error(e);
+    status.textContent = 'Error: ' + e.message;
+});
+    </script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "local_shadertoy_claude",
+  "version": "1.0.0",
+  "description": "",
+  "main": "render-shader.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TevenLeScao/local_shadertoy_claude.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/TevenLeScao/local_shadertoy_claude/issues"
+  },
+  "homepage": "https://github.com/TevenLeScao/local_shadertoy_claude#readme",
+  "dependencies": {
+    "puppeteer": "^24.37.3"
+  }
+}
