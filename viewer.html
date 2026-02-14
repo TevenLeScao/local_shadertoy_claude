@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shader Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+            background: #0a0a0a;
+            color: #fff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 10px 15px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            flex-wrap: wrap;
+        }
+
+        .toolbar select, .toolbar button, .toolbar input {
+            padding: 6px 12px;
+            background: #333;
+            border: 1px solid #444;
+            color: white;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .toolbar button:hover { background: #444; }
+        .toolbar button.active { background: #0e639c; }
+
+        .toolbar label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 13px;
+            color: #888;
+        }
+
+        .status {
+            margin-left: auto;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #888;
+        }
+
+        .status-dot.connected { background: #00ff88; }
+        .status-dot.disconnected { background: #ff4444; }
+
+        .canvas-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            overflow: hidden;
+        }
+
+        #glcanvas {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        .info-bar {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            padding: 8px 15px;
+            background: #1a1a1a;
+            border-top: 1px solid #333;
+            font-size: 12px;
+            color: #888;
+        }
+
+        .info-bar .value { color: #00d4ff; }
+
+        .notification {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            padding: 10px 20px;
+            background: #00ff88;
+            color: #000;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 100;
+        }
+
+        .notification.show { opacity: 1; }
+        .notification.error { background: #ff4444; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <select id="shaderSelect">
+            <option value="">Select shader...</option>
+        </select>
+        <button id="playPauseBtn">Pause</button>
+        <button id="resetBtn">Reset</button>
+        <button id="screenshotBtn">Screenshot</button>
+        <label>
+            <input type="checkbox" id="autoScreenshot">
+            Auto-screenshot on change
+        </label>
+        <label>
+            Resolution:
+            <select id="resolutionSelect">
+                <option value="640x360">640x360</option>
+                <option value="800x450">800x450</option>
+                <option value="1280x720" selected>1280x720</option>
+                <option value="1920x1080">1920x1080</option>
+            </select>
+        </label>
+        <label>
+            Time:
+            <input type="number" id="timeInput" value="0" step="0.1" style="width: 60px;">
+        </label>
+        <div class="status">
+            <span id="connectionStatus">Connecting...</span>
+            <div class="status-dot" id="statusDot"></div>
+        </div>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="glcanvas"></canvas>
+    </div>
+
+    <div class="info-bar">
+        <span>FPS: <span class="value" id="fpsValue">--</span></span>
+        <span>Time: <span class="value" id="timeValue">0.00</span>s</span>
+        <span>Frame: <span class="value" id="frameValue">0</span></span>
+        <span>Shader: <span class="value" id="shaderName">--</span></span>
+        <span>Resolution: <span class="value" id="resolutionValue">--</span></span>
+    </div>
+
+    <div class="notification" id="notification"></div>
+
+    <script>
+        // ==================== Configuration ====================
+        const API_BASE = '';  // Same origin
+
+        // ==================== WebGL Setup ====================
+        const canvas = document.getElementById('glcanvas');
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        const isWebGL2 = gl instanceof WebGL2RenderingContext;
+
+        if (!gl) alert('WebGL not supported');
+
+        // ==================== State ====================
+        let program = null;
+        let uniformLocations = {};
+        let startTime = performance.now();
+        let lastFrameTime = startTime;
+        let frame = 0;
+        let isPlaying = true;
+        let pausedTime = 0;
+        let currentShader = null;
+        let currentShaderVersion = 0;
+        let fpsHistory = [];
+        let eventSource = null;
+
+        // ==================== Shaders ====================
+        const vertexShader = isWebGL2 ? `#version 300 es
+in vec4 a_position;
+void main() { gl_Position = a_position; }` :
+`attribute vec4 a_position;
+void main() { gl_Position = a_position; }`;
+
+        function wrapShader(code) {
+            if (isWebGL2) {
+                return `#version 300 es
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform int iFrame;
+uniform float iFrameRate;
+uniform vec4 iMouse;
+uniform vec4 iDate;
+out vec4 outColor;
+${code}
+void main() { mainImage(outColor, gl_FragCoord.xy); }`;
+            } else {
+                return `precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform int iFrame;
+uniform float iFrameRate;
+uniform vec4 iMouse;
+uniform vec4 iDate;
+${code}
+void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }`;
+            }
+        }
+
+        // ==================== WebGL Functions ====================
+        function setupGeometry() {
+            const positions = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+        }
+
+        function compileShader(type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                const info = gl.getShaderInfoLog(shader);
+                gl.deleteShader(shader);
+                throw new Error(info);
+            }
+            return shader;
+        }
+
+        function createProgram(vertSrc, fragSrc) {
+            const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
+            const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
+            const prog = gl.createProgram();
+            gl.attachShader(prog, vs);
+            gl.attachShader(prog, fs);
+            gl.linkProgram(prog);
+            if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+                throw new Error(gl.getProgramInfoLog(prog));
+            }
+            return prog;
+        }
+
+        function compileUserShader(code) {
+            try {
+                const newProg = createProgram(vertexShader, wrapShader(code));
+                if (program) gl.deleteProgram(program);
+                program = newProg;
+                gl.useProgram(program);
+
+                const posLoc = gl.getAttribLocation(program, 'a_position');
+                gl.enableVertexAttribArray(posLoc);
+                gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+                uniformLocations = {
+                    iResolution: gl.getUniformLocation(program, 'iResolution'),
+                    iTime: gl.getUniformLocation(program, 'iTime'),
+                    iTimeDelta: gl.getUniformLocation(program, 'iTimeDelta'),
+                    iFrame: gl.getUniformLocation(program, 'iFrame'),
+                    iFrameRate: gl.getUniformLocation(program, 'iFrameRate'),
+                    iMouse: gl.getUniformLocation(program, 'iMouse'),
+                    iDate: gl.getUniformLocation(program, 'iDate'),
+                };
+                return { success: true };
+            } catch (e) {
+                return { success: false, error: e.message };
+            }
+        }
+
+        function setResolution(width, height) {
+            canvas.width = width;
+            canvas.height = height;
+            gl.viewport(0, 0, width, height);
+            document.getElementById('resolutionValue').textContent = `${width}x${height}`;
+        }
+
+        // ==================== Rendering ====================
+        function render() {
+            if (!program) {
+                requestAnimationFrame(render);
+                return;
+            }
+
+            const now = performance.now();
+            const deltaTime = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+
+            let time;
+            if (isPlaying) {
+                time = (now - startTime) / 1000;
+            } else {
+                time = pausedTime;
+            }
+
+            // Update time input if playing
+            if (isPlaying && frame % 10 === 0) {
+                document.getElementById('timeInput').value = time.toFixed(1);
+            }
+
+            // FPS calculation
+            fpsHistory.push(1 / deltaTime);
+            if (fpsHistory.length > 60) fpsHistory.shift();
+            const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+
+            // Update UI
+            document.getElementById('fpsValue').textContent = avgFps.toFixed(0);
+            document.getElementById('timeValue').textContent = time.toFixed(2);
+            document.getElementById('frameValue').textContent = frame;
+
+            // Set uniforms
+            gl.uniform3f(uniformLocations.iResolution, canvas.width, canvas.height, 1.0);
+            gl.uniform1f(uniformLocations.iTime, time);
+            gl.uniform1f(uniformLocations.iTimeDelta, deltaTime);
+            gl.uniform1i(uniformLocations.iFrame, frame);
+            gl.uniform1f(uniformLocations.iFrameRate, avgFps);
+            gl.uniform4f(uniformLocations.iMouse, 0, 0, 0, 0);
+
+            const d = new Date();
+            gl.uniform4f(uniformLocations.iDate,
+                d.getFullYear(), d.getMonth(), d.getDate(),
+                d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds());
+
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+            if (isPlaying) frame++;
+            requestAnimationFrame(render);
+        }
+
+        // ==================== API Functions ====================
+        async function fetchShaderList() {
+            try {
+                const res = await fetch(`${API_BASE}/api/shaders`);
+                const data = await res.json();
+                return data.shaders;
+            } catch (e) {
+                console.error('Failed to fetch shader list:', e);
+                return [];
+            }
+        }
+
+        async function fetchShader(name) {
+            try {
+                const res = await fetch(`${API_BASE}/api/shader?name=${encodeURIComponent(name)}`);
+                if (!res.ok) throw new Error('Shader not found');
+                return await res.json();
+            } catch (e) {
+                console.error('Failed to fetch shader:', e);
+                return null;
+            }
+        }
+
+        async function loadShader(name) {
+            const data = await fetchShader(name);
+            if (!data) {
+                showNotification(`Failed to load ${name}`, true);
+                return false;
+            }
+
+            const result = compileUserShader(data.content);
+            if (!result.success) {
+                showNotification(`Compile error: ${result.error}`, true);
+                return false;
+            }
+
+            currentShader = name;
+            currentShaderVersion = data.version;
+            document.getElementById('shaderName').textContent = name;
+            document.getElementById('shaderSelect').value = name;
+            showNotification(`Loaded: ${name}`);
+
+            // Reset time on shader change
+            startTime = performance.now();
+            pausedTime = 0;
+            frame = 0;
+
+            return true;
+        }
+
+        async function saveScreenshot() {
+            if (!currentShader) {
+                showNotification('No shader loaded', true);
+                return;
+            }
+
+            const imageData = canvas.toDataURL('image/png');
+
+            try {
+                const res = await fetch(`${API_BASE}/api/screenshot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        shader: currentShader,
+                        image: imageData
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showNotification(`Screenshot: ${data.filename}`);
+                }
+            } catch (e) {
+                console.error('Screenshot error:', e);
+                // Fallback: download locally
+                const link = document.createElement('a');
+                link.download = `${currentShader.replace('.glsl', '')}_${Date.now()}.png`;
+                link.href = imageData;
+                link.click();
+                showNotification('Screenshot downloaded');
+            }
+        }
+
+        // ==================== Server-Sent Events ====================
+        function connectSSE() {
+            eventSource = new EventSource(`${API_BASE}/api/events`);
+
+            eventSource.onopen = () => {
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('statusDot').className = 'status-dot connected';
+            };
+
+            eventSource.onerror = () => {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('statusDot').className = 'status-dot disconnected';
+                // Reconnect after delay
+                setTimeout(connectSSE, 2000);
+            };
+
+            eventSource.addEventListener('reload', async (e) => {
+                const data = JSON.parse(e.data);
+                console.log('Reload event:', data);
+
+                if (data.shader === currentShader) {
+                    const loaded = await loadShader(data.shader);
+                    if (loaded && document.getElementById('autoScreenshot').checked) {
+                        // Wait a frame for render, then screenshot
+                        setTimeout(saveScreenshot, 100);
+                    }
+                }
+            });
+        }
+
+        // ==================== UI Functions ====================
+        function showNotification(message, isError = false) {
+            const el = document.getElementById('notification');
+            el.textContent = message;
+            el.className = 'notification show' + (isError ? ' error' : '');
+            setTimeout(() => el.className = 'notification', 2000);
+        }
+
+        async function populateShaderList() {
+            const select = document.getElementById('shaderSelect');
+            const shaders = await fetchShaderList();
+
+            // Clear existing options
+            select.innerHTML = '<option value="">Select shader...</option>';
+
+            shaders.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                select.appendChild(option);
+            });
+
+            // Auto-load first shader if available
+            if (shaders.length > 0 && !currentShader) {
+                loadShader(shaders[0]);
+            }
+        }
+
+        // ==================== Event Listeners ====================
+        document.getElementById('shaderSelect').addEventListener('change', (e) => {
+            if (e.target.value) loadShader(e.target.value);
+        });
+
+        document.getElementById('playPauseBtn').addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('playPauseBtn');
+            if (isPlaying) {
+                btn.textContent = 'Pause';
+                startTime = performance.now() - pausedTime * 1000;
+            } else {
+                btn.textContent = 'Play';
+                pausedTime = (performance.now() - startTime) / 1000;
+            }
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            startTime = performance.now();
+            pausedTime = 0;
+            frame = 0;
+            document.getElementById('timeInput').value = '0';
+        });
+
+        document.getElementById('screenshotBtn').addEventListener('click', saveScreenshot);
+
+        document.getElementById('resolutionSelect').addEventListener('change', (e) => {
+            const [w, h] = e.target.value.split('x').map(Number);
+            setResolution(w, h);
+        });
+
+        document.getElementById('timeInput').addEventListener('change', (e) => {
+            const newTime = parseFloat(e.target.value) || 0;
+            pausedTime = newTime;
+            startTime = performance.now() - newTime * 1000;
+        });
+
+        // ==================== Initialization ====================
+        setupGeometry();
+        setResolution(1280, 720);
+        populateShaderList();
+        connectSSE();
+        render();
+    </script>
+</body>
+</html>
