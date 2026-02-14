@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Shadertoy</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/monokai.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1e1e1e;
+            color: #fff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .editor-panel {
+            width: 50%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: #2d2d2d;
+            border-bottom: 1px solid #333;
+            flex-wrap: wrap;
+        }
+
+        .toolbar button, .toolbar select {
+            padding: 6px 12px;
+            background: #0e639c;
+            border: none;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .toolbar select {
+            background: #3c3c3c;
+        }
+
+        .toolbar button:hover {
+            background: #1177bb;
+        }
+
+        .toolbar select:hover {
+            background: #4c4c4c;
+        }
+
+        .toolbar button.active {
+            background: #d73a49;
+        }
+
+        .stats {
+            margin-left: auto;
+            font-size: 12px;
+            color: #888;
+            font-family: monospace;
+        }
+
+        .editor-wrapper {
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .CodeMirror {
+            height: 100% !important;
+            font-size: 14px;
+        }
+
+        .error-panel {
+            background: #3c1f1f;
+            border-top: 1px solid #d73a49;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #f48771;
+            max-height: 150px;
+            overflow-y: auto;
+            display: none;
+            white-space: pre-wrap;
+        }
+
+        .error-panel.visible {
+            display: block;
+        }
+
+        .preview-panel {
+            width: 50%;
+            position: relative;
+            background: #000;
+        }
+
+        #glcanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .preview-overlay {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 8px;
+        }
+
+        .preview-overlay button {
+            padding: 6px 10px;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .preview-overlay button:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .fullscreen .editor-panel {
+            display: none;
+        }
+
+        .fullscreen .preview-panel {
+            width: 100%;
+        }
+
+        .resize-handle {
+            width: 5px;
+            background: #333;
+            cursor: col-resize;
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            z-index: 10;
+        }
+
+        .resize-handle:hover {
+            background: #0e639c;
+        }
+
+        .help-text {
+            font-size: 11px;
+            color: #666;
+            padding: 0 10px 5px 10px;
+            background: #2d2d2d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="container">
+        <div class="editor-panel" id="editorPanel">
+            <div class="toolbar">
+                <button id="playPauseBtn">Pause</button>
+                <button id="resetBtn">Reset</button>
+                <select id="examplesSelect">
+                    <option value="">Load Example...</option>
+                    <option value="plasma">Plasma Waves</option>
+                    <option value="raymarching">Raymarching Sphere</option>
+                    <option value="fractal">Mandelbrot Fractal</option>
+                    <option value="tunnel">Infinite Tunnel</option>
+                    <option value="ocean">Ocean Waves</option>
+                </select>
+                <div class="stats">
+                    <span id="fpsDisplay">FPS: 0</span> |
+                    <span id="timeDisplay">Time: 0.00s</span> |
+                    <span id="frameDisplay">Frame: 0</span>
+                </div>
+            </div>
+            <div class="help-text">Ctrl/Cmd+Enter to compile | Drag center to resize</div>
+            <div class="editor-wrapper">
+                <textarea id="shaderCode"></textarea>
+            </div>
+            <div class="error-panel" id="errorPanel"></div>
+        </div>
+        <div class="resize-handle" id="resizeHandle"></div>
+        <div class="preview-panel" id="previewPanel">
+            <canvas id="glcanvas"></canvas>
+            <div class="preview-overlay">
+                <button id="fullscreenBtn">Fullscreen</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+    <script>
+        // Example shaders
+        const EXAMPLES = {
+            plasma: `// Plasma Waves
+// A colorful animated plasma effect
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = (2.0 * fragCoord - iResolution.xy) / min(iResolution.x, iResolution.y);
+
+    float t = iTime * 0.5;
+
+    vec3 col = vec3(0.0);
+    for (float i = 1.0; i < 5.0; i++) {
+        vec2 q = p * i;
+        q.x += sin(q.y + t) * 0.3;
+        q.y += cos(q.x + t) * 0.3;
+        float d = abs(sin(q.x + q.y + t) * 0.5 + 0.5);
+        col += vec3(0.5, 0.3, 0.7) / (d * 10.0 + 0.1) / i;
+    }
+
+    fragColor = vec4(col, 1.0);
+}`,
+
+            raymarching: `// Raymarching Sphere
+// Basic raymarching with a sphere and ground plane
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float sdPlane(vec3 p) {
+    return p.y + 1.0;
+}
+
+float map(vec3 p) {
+    float sphere = sdSphere(p - vec3(0.0, 0.0, 0.0), 1.0);
+    float plane = sdPlane(p);
+    return min(sphere, plane);
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(
+        map(p + e.xyy) - map(p - e.xyy),
+        map(p + e.yxy) - map(p - e.yxy),
+        map(p + e.yyx) - map(p - e.yyx)
+    ));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (2.0 * fragCoord - iResolution.xy) / iResolution.y;
+
+    // Camera
+    vec3 ro = vec3(0.0, 1.0, -3.0);
+    vec3 rd = normalize(vec3(uv, 1.5));
+
+    // Rotate camera
+    float angle = iTime * 0.3;
+    ro.xz = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * ro.xz;
+    rd.xz = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * rd.xz;
+
+    // Raymarch
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        vec3 p = ro + rd * t;
+        float d = map(p);
+        if (d < 0.001 || t > 100.0) break;
+        t += d;
+    }
+
+    vec3 col = vec3(0.1, 0.1, 0.2);
+
+    if (t < 100.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 lightDir = normalize(vec3(1.0, 1.0, -1.0));
+        float diff = max(dot(n, lightDir), 0.0);
+        float amb = 0.2;
+        col = vec3(0.8, 0.4, 0.2) * (diff + amb);
+    }
+
+    fragColor = vec4(col, 1.0);
+}`,
+
+            fractal: `// Mandelbrot Fractal
+// Classic fractal with smooth coloring
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
+
+    // Zoom and pan
+    float zoom = 2.0 + sin(iTime * 0.1) * 1.5;
+    vec2 c = uv * zoom + vec2(-0.5, 0.0);
+
+    vec2 z = vec2(0.0);
+    float iter = 0.0;
+    const float maxIter = 100.0;
+
+    for (float i = 0.0; i < maxIter; i++) {
+        z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+        if (dot(z, z) > 4.0) {
+            iter = i;
+            break;
+        }
+        iter = i;
+    }
+
+    // Smooth coloring
+    float smooth_iter = iter - log2(log2(dot(z, z))) + 4.0;
+
+    vec3 col = vec3(0.0);
+    if (iter < maxIter - 1.0) {
+        float t = smooth_iter / maxIter;
+        col = 0.5 + 0.5 * cos(3.0 + t * 6.28318 * 2.0 + vec3(0.0, 0.6, 1.0));
+    }
+
+    fragColor = vec4(col, 1.0);
+}`,
+
+            tunnel: `// Infinite Tunnel
+// Hypnotic infinite tunnel effect
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (2.0 * fragCoord - iResolution.xy) / min(iResolution.x, iResolution.y);
+
+    float angle = atan(uv.y, uv.x);
+    float radius = length(uv);
+
+    // Create tunnel coordinates
+    float z = 1.0 / radius + iTime;
+    float a = angle / 3.14159;
+
+    // Checker pattern
+    float pattern = mod(floor(z * 4.0) + floor(a * 8.0), 2.0);
+
+    // Color based on depth
+    vec3 col1 = vec3(0.1, 0.3, 0.6);
+    vec3 col2 = vec3(0.9, 0.6, 0.2);
+    vec3 col = mix(col1, col2, pattern);
+
+    // Fog
+    float fog = 1.0 - exp(-radius * 0.5);
+    col = mix(col, vec3(0.0), fog);
+
+    // Vignette
+    col *= 1.0 - radius * 0.3;
+
+    fragColor = vec4(col, 1.0);
+}`,
+
+            ocean: `// Ocean Waves
+// Animated ocean surface with lighting
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float f = 0.0;
+    f += 0.5000 * noise(p); p *= 2.02;
+    f += 0.2500 * noise(p); p *= 2.03;
+    f += 0.1250 * noise(p); p *= 2.01;
+    f += 0.0625 * noise(p);
+    return f / 0.9375;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = (2.0 * fragCoord - iResolution.xy) / iResolution.y;
+
+    // Ocean surface
+    float t = iTime * 0.3;
+    vec2 oceanUV = p * 3.0 + vec2(t, 0.0);
+    float height = fbm(oceanUV) * 0.5;
+    height += fbm(oceanUV * 2.0 + t) * 0.25;
+
+    // Calculate normal from height
+    float eps = 0.01;
+    float hx = fbm(oceanUV + vec2(eps, 0.0)) - fbm(oceanUV - vec2(eps, 0.0));
+    float hy = fbm(oceanUV + vec2(0.0, eps)) - fbm(oceanUV - vec2(0.0, eps));
+    vec3 normal = normalize(vec3(-hx, -hy, eps * 2.0));
+
+    // Lighting
+    vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
+    float diff = max(dot(normal, lightDir), 0.0);
+
+    // Fresnel
+    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
+
+    // Colors
+    vec3 deepColor = vec3(0.0, 0.1, 0.3);
+    vec3 shallowColor = vec3(0.0, 0.4, 0.5);
+    vec3 skyColor = vec3(0.5, 0.7, 0.9);
+
+    vec3 waterColor = mix(deepColor, shallowColor, height);
+    vec3 col = waterColor * (0.5 + diff * 0.5);
+    col = mix(col, skyColor, fresnel * 0.5);
+
+    // Sun reflection
+    vec3 reflectDir = reflect(-viewDir, normal);
+    float sun = pow(max(dot(reflectDir, lightDir), 0.0), 64.0);
+    col += vec3(1.0, 0.9, 0.7) * sun;
+
+    fragColor = vec4(col, 1.0);
+}`
+        };
+
+        // WebGL setup
+        const canvas = document.getElementById('glcanvas');
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+
+        if (!gl) {
+            alert('WebGL not supported in this browser');
+        }
+
+        const isWebGL2 = gl instanceof WebGL2RenderingContext;
+
+        // Line offset for error messages (number of lines in wrapper before user code)
+        const WRAPPER_LINES_BEFORE = isWebGL2 ? 11 : 10;
+
+        // Vertex shader
+        const vertexShaderSource = isWebGL2 ? `#version 300 es
+in vec4 a_position;
+void main() {
+    gl_Position = a_position;
+}` : `attribute vec4 a_position;
+void main() {
+    gl_Position = a_position;
+}`;
+
+        // Fragment shader wrapper
+        function createFragmentShader(userCode) {
+            if (isWebGL2) {
+                return `#version 300 es
+precision highp float;
+
+uniform vec3 iResolution;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform int iFrame;
+uniform float iFrameRate;
+uniform vec4 iMouse;
+uniform vec4 iDate;
+
+out vec4 outColor;
+
+${userCode}
+
+void main() {
+    mainImage(outColor, gl_FragCoord.xy);
+}`;
+            } else {
+                return `precision highp float;
+
+uniform vec3 iResolution;
+uniform float iTime;
+uniform float iTimeDelta;
+uniform int iFrame;
+uniform float iFrameRate;
+uniform vec4 iMouse;
+uniform vec4 iDate;
+
+${userCode}
+
+void main() {
+    mainImage(gl_FragColor, gl_FragCoord.xy);
+}`;
+            }
+        }
+
+        // State
+        let program = null;
+        let uniformLocations = {};
+        let startTime = performance.now();
+        let lastFrameTime = startTime;
+        let frame = 0;
+        let isPlaying = true;
+        let pausedTime = 0;
+        let mouse = { x: 0, y: 0, clickX: 0, clickY: 0, down: false };
+        let fpsHistory = [];
+
+        // Compile shader
+        function compileShader(type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                const info = gl.getShaderInfoLog(shader);
+                gl.deleteShader(shader);
+                throw new Error(info);
+            }
+            return shader;
+        }
+
+        // Create program from shaders
+        function createProgram(vertexSource, fragmentSource) {
+            const vertexShader = compileShader(gl.VERTEX_SHADER, vertexSource);
+            const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentSource);
+
+            const prog = gl.createProgram();
+            gl.attachShader(prog, vertexShader);
+            gl.attachShader(prog, fragmentShader);
+            gl.linkProgram(prog);
+
+            if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+                const info = gl.getProgramInfoLog(prog);
+                gl.deleteProgram(prog);
+                throw new Error(info);
+            }
+
+            return prog;
+        }
+
+        // Setup geometry (fullscreen quad)
+        function setupGeometry() {
+            const positions = new Float32Array([
+                -1, -1,  1, -1, -1,  1,
+                -1,  1,  1, -1,  1,  1,
+            ]);
+
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+        }
+
+        // Adjust error line numbers
+        function adjustErrorLineNumbers(errorMsg) {
+            return errorMsg.replace(/ERROR: \d+:(\d+)/g, (match, lineNum) => {
+                const adjustedLine = parseInt(lineNum) - WRAPPER_LINES_BEFORE;
+                return `ERROR: line ${adjustedLine}`;
+            });
+        }
+
+        // Compile user shader
+        function compileUserShader(code) {
+            const errorPanel = document.getElementById('errorPanel');
+
+            try {
+                const fragSrc = createFragmentShader(code);
+                const newProgram = createProgram(vertexShaderSource, fragSrc);
+
+                // Cleanup old program
+                if (program) {
+                    gl.deleteProgram(program);
+                }
+
+                program = newProgram;
+                gl.useProgram(program);
+
+                // Setup attribute
+                const posLoc = gl.getAttribLocation(program, 'a_position');
+                gl.enableVertexAttribArray(posLoc);
+                gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+                // Cache uniform locations
+                uniformLocations = {
+                    iResolution: gl.getUniformLocation(program, 'iResolution'),
+                    iTime: gl.getUniformLocation(program, 'iTime'),
+                    iTimeDelta: gl.getUniformLocation(program, 'iTimeDelta'),
+                    iFrame: gl.getUniformLocation(program, 'iFrame'),
+                    iFrameRate: gl.getUniformLocation(program, 'iFrameRate'),
+                    iMouse: gl.getUniformLocation(program, 'iMouse'),
+                    iDate: gl.getUniformLocation(program, 'iDate'),
+                };
+
+                errorPanel.classList.remove('visible');
+                errorPanel.textContent = '';
+
+                // Save to localStorage
+                localStorage.setItem('shadertoy_code', code);
+
+                return true;
+            } catch (e) {
+                const adjustedError = adjustErrorLineNumbers(e.message);
+                errorPanel.textContent = adjustedError;
+                errorPanel.classList.add('visible');
+                return false;
+            }
+        }
+
+        // Resize canvas to match display size
+        function resizeCanvas() {
+            const displayWidth = canvas.clientWidth;
+            const displayHeight = canvas.clientHeight;
+
+            if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+                canvas.width = displayWidth;
+                canvas.height = displayHeight;
+                gl.viewport(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        // Render frame
+        function render() {
+            resizeCanvas();
+
+            if (!program) {
+                requestAnimationFrame(render);
+                return;
+            }
+
+            const now = performance.now();
+            const deltaTime = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+
+            // Calculate time
+            let time;
+            if (isPlaying) {
+                time = (now - startTime) / 1000;
+            } else {
+                time = pausedTime;
+            }
+
+            // Calculate FPS
+            fpsHistory.push(1 / deltaTime);
+            if (fpsHistory.length > 60) fpsHistory.shift();
+            const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+
+            // Update stats display
+            document.getElementById('fpsDisplay').textContent = `FPS: ${avgFps.toFixed(0)}`;
+            document.getElementById('timeDisplay').textContent = `Time: ${time.toFixed(2)}s`;
+            document.getElementById('frameDisplay').textContent = `Frame: ${frame}`;
+
+            // Set uniforms
+            gl.uniform3f(uniformLocations.iResolution, canvas.width, canvas.height, 1.0);
+            gl.uniform1f(uniformLocations.iTime, time);
+            gl.uniform1f(uniformLocations.iTimeDelta, deltaTime);
+            gl.uniform1i(uniformLocations.iFrame, frame);
+            gl.uniform1f(uniformLocations.iFrameRate, avgFps);
+
+            // Mouse: xy = current position, zw = click position
+            const mouseY = canvas.height - mouse.y;
+            const clickY = canvas.height - mouse.clickY;
+            gl.uniform4f(uniformLocations.iMouse,
+                mouse.down ? mouse.x : mouse.clickX,
+                mouse.down ? mouseY : clickY,
+                mouse.down ? mouse.clickX : -Math.abs(mouse.clickX),
+                mouse.down ? clickY : -Math.abs(clickY)
+            );
+
+            // Date
+            const d = new Date();
+            gl.uniform4f(uniformLocations.iDate,
+                d.getFullYear(),
+                d.getMonth(),
+                d.getDate(),
+                d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000
+            );
+
+            // Draw
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+            if (isPlaying) {
+                frame++;
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        // Initialize CodeMirror editor
+        const editor = CodeMirror.fromTextArea(document.getElementById('shaderCode'), {
+            mode: 'text/x-c++src',
+            theme: 'monokai',
+            lineNumbers: true,
+            matchBrackets: true,
+            indentUnit: 4,
+            tabSize: 4,
+            indentWithTabs: false,
+        });
+
+        // Load saved code or use default
+        const savedCode = localStorage.getItem('shadertoy_code');
+        editor.setValue(savedCode || EXAMPLES.plasma);
+
+        // Debounced compilation
+        let compileTimeout = null;
+        editor.on('change', () => {
+            clearTimeout(compileTimeout);
+            compileTimeout = setTimeout(() => {
+                compileUserShader(editor.getValue());
+            }, 500);
+        });
+
+        // Example selector
+        document.getElementById('examplesSelect').addEventListener('change', (e) => {
+            const example = EXAMPLES[e.target.value];
+            if (example) {
+                editor.setValue(example);
+                compileUserShader(example);
+                // Reset time when loading example
+                startTime = performance.now();
+                pausedTime = 0;
+                frame = 0;
+            }
+            e.target.value = '';
+        });
+
+        // Mouse handling
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+            mouse.clickX = mouse.x;
+            mouse.clickY = mouse.y;
+            mouse.down = true;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = e.clientX - rect.left;
+            mouse.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            mouse.down = false;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            mouse.down = false;
+        });
+
+        // Button handlers
+        document.getElementById('playPauseBtn').addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('playPauseBtn');
+            if (isPlaying) {
+                btn.textContent = 'Pause';
+                btn.classList.remove('active');
+                startTime = performance.now() - pausedTime * 1000;
+            } else {
+                btn.textContent = 'Play';
+                btn.classList.add('active');
+                pausedTime = (performance.now() - startTime) / 1000;
+            }
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            startTime = performance.now();
+            pausedTime = 0;
+            frame = 0;
+        });
+
+        document.getElementById('fullscreenBtn').addEventListener('click', () => {
+            document.getElementById('container').classList.toggle('fullscreen');
+            setTimeout(resizeCanvas, 100);
+        });
+
+        // Resize handle
+        const resizeHandle = document.getElementById('resizeHandle');
+        let isResizing = false;
+
+        resizeHandle.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+
+            const container = document.getElementById('container');
+            const containerRect = container.getBoundingClientRect();
+            const percentage = ((e.clientX - containerRect.left) / containerRect.width) * 100;
+
+            const editorPanel = document.getElementById('editorPanel');
+            const previewPanel = document.getElementById('previewPanel');
+
+            editorPanel.style.width = `${Math.max(20, Math.min(80, percentage))}%`;
+            previewPanel.style.width = `${100 - Math.max(20, Math.min(80, percentage))}%`;
+            resizeHandle.style.left = `${Math.max(20, Math.min(80, percentage))}%`;
+
+            editor.refresh();
+        });
+
+        document.addEventListener('mouseup', () => {
+            isResizing = false;
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                compileUserShader(editor.getValue());
+            }
+            if (e.key === 'Escape') {
+                document.getElementById('container').classList.remove('fullscreen');
+            }
+        });
+
+        // Initialize
+        setupGeometry();
+        compileUserShader(editor.getValue());
+        render();
+    </script>
+</body>
+</html>
