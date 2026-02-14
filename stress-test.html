@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadertoy Stress Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            color: #00d4ff;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #0e639c;
+            border: none;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        button.running {
+            background: #d73a49;
+        }
+
+        .test-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .test-panel {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #333;
+        }
+
+        .test-panel h3 {
+            color: #00d4ff;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #000;
+            margin-bottom: 10px;
+        }
+
+        .canvas-container canvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        .stats {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .stats .value {
+            color: #00ff88;
+            font-weight: bold;
+        }
+
+        .stats .warning {
+            color: #ffaa00;
+        }
+
+        .stats .error {
+            color: #ff4444;
+        }
+
+        .results {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #333;
+            margin-top: 20px;
+        }
+
+        .results h2 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+        }
+
+        .results table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .results th, .results td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+
+        .results th {
+            color: #00d4ff;
+        }
+
+        .log {
+            background: #0a0a15;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+        }
+
+        .log-entry.info { color: #888; }
+        .log-entry.success { color: #00ff88; }
+        .log-entry.warning { color: #ffaa00; }
+        .log-entry.error { color: #ff4444; }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+
+        .progress-bar .fill {
+            height: 100%;
+            background: #00d4ff;
+            width: 0%;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <h1>Shadertoy Stress Test</h1>
+
+    <div class="controls">
+        <button id="runAllBtn">Run All Tests</button>
+        <button id="runGpuBtn">GPU Stress Test</button>
+        <button id="runMemoryBtn">Memory Test</button>
+        <button id="runCompileBtn">Compile Speed Test</button>
+        <button id="runResolutionBtn">Resolution Scaling Test</button>
+        <button id="stopBtn" disabled>Stop Tests</button>
+    </div>
+
+    <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+
+    <div class="test-grid">
+        <div class="test-panel">
+            <h3>Test Canvas</h3>
+            <div class="canvas-container">
+                <canvas id="testCanvas"></canvas>
+            </div>
+            <div class="stats" id="liveStats">
+                FPS: <span class="value" id="fpsValue">--</span> |
+                Frame Time: <span class="value" id="frameTimeValue">--</span>ms |
+                Resolution: <span class="value" id="resValue">--</span>
+            </div>
+        </div>
+
+        <div class="test-panel">
+            <h3>Performance Metrics</h3>
+            <div class="stats">
+                <p>GPU Draw Calls: <span class="value" id="drawCalls">0</span></p>
+                <p>Shader Compiles: <span class="value" id="compileCount">0</span></p>
+                <p>Compile Errors: <span class="value" id="errorCount">0</span></p>
+                <p>Avg Compile Time: <span class="value" id="avgCompileTime">--</span>ms</p>
+                <p>Memory (JS Heap): <span class="value" id="memoryUsage">--</span></p>
+                <p>WebGL Context Lost: <span class="value" id="contextLost">No</span></p>
+            </div>
+        </div>
+    </div>
+
+    <div class="results" id="resultsPanel" style="display: none;">
+        <h2>Test Results</h2>
+        <table id="resultsTable">
+            <thead>
+                <tr>
+                    <th>Test</th>
+                    <th>Result</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="log" id="logPanel"></div>
+
+    <script>
+        // ==================== WebGL Setup ====================
+        const canvas = document.getElementById('testCanvas');
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        const isWebGL2 = gl instanceof WebGL2RenderingContext;
+
+        if (!gl) {
+            alert('WebGL not supported');
+        }
+
+        // State
+        let program = null;
+        let uniformLocations = {};
+        let animationId = null;
+        let isRunning = false;
+        let startTime = performance.now();
+        let frameCount = 0;
+        let drawCalls = 0;
+        let compileCount = 0;
+        let errorCount = 0;
+        let compileTimes = [];
+        let fpsHistory = [];
+        let frameTimeHistory = [];
+
+        // ==================== Shader Templates ====================
+        const vertexShader = isWebGL2 ? `#version 300 es
+in vec4 a_position;
+void main() { gl_Position = a_position; }` :
+`attribute vec4 a_position;
+void main() { gl_Position = a_position; }`;
+
+        function wrapShader(code) {
+            if (isWebGL2) {
+                return `#version 300 es
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform int iFrame;
+out vec4 outColor;
+${code}
+void main() { mainImage(outColor, gl_FragCoord.xy); }`;
+            } else {
+                return `precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform int iFrame;
+${code}
+void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }`;
+            }
+        }
+
+        // ==================== Test Shaders ====================
+        const TEST_SHADERS = {
+            simple: `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    fragColor = vec4(uv, 0.5 + 0.5 * sin(iTime), 1.0);
+}`,
+            medium: `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = (2.0 * fragCoord - iResolution.xy) / iResolution.y;
+    vec3 col = vec3(0.0);
+    for (float i = 1.0; i < 8.0; i++) {
+        vec2 q = p * i;
+        q += vec2(sin(iTime + q.y), cos(iTime + q.x)) * 0.5;
+        col += vec3(0.5, 0.3, 0.7) / (length(sin(q)) + 0.1) / i;
+    }
+    fragColor = vec4(col, 1.0);
+}`,
+            heavy: `
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
+               mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
+}
+float fbm(vec2 p) {
+    float f = 0.0;
+    for (int i = 0; i < 8; i++) {
+        f += noise(p) / pow(2.0, float(i + 1));
+        p *= 2.0;
+    }
+    return f;
+}
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = uv * 10.0 + iTime * 0.5;
+    float n = fbm(p) + fbm(p * 2.0 + iTime) * 0.5;
+    vec3 col = vec3(n * 0.5, n * 0.7, n);
+    col += 0.5 + 0.5 * cos(iTime + uv.xyx * 3.0 + vec3(0, 2, 4));
+    fragColor = vec4(col * n, 1.0);
+}`,
+            extreme: `
+float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float noise3D(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x),
+                   mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                   mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm3D(vec3 p) {
+    float f = 0.0;
+    for (int i = 0; i < 6; i++) { f += noise3D(p) / pow(2.0, float(i + 1)); p *= 2.0; }
+    return f;
+}
+float map(vec3 p) {
+    return length(p) - 1.0 + fbm3D(p * 3.0 + iTime * 0.5) * 0.3;
+}
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p+e.xyy)-map(p-e.xyy), map(p+e.yxy)-map(p-e.yxy), map(p+e.yyx)-map(p-e.yyx)));
+}
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (2.0 * fragCoord - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 0.0, -3.0), rd = normalize(vec3(uv, 1.5));
+    float t = 0.0;
+    for (int i = 0; i < 128; i++) {
+        vec3 p = ro + rd * t;
+        float d = map(p);
+        if (d < 0.001 || t > 20.0) break;
+        t += d * 0.5;
+    }
+    vec3 col = vec3(0.1, 0.1, 0.2);
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        col = vec3(0.8, 0.5, 0.3) * (0.5 + 0.5 * dot(n, normalize(vec3(1,1,-1))));
+        col += fbm3D(p * 5.0) * 0.3;
+    }
+    fragColor = vec4(col, 1.0);
+}`,
+            invalid: `
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    this is not valid GLSL code;
+    fragColor = vec4(1.0);
+}`
+        };
+
+        // ==================== WebGL Functions ====================
+        function setupGeometry() {
+            const positions = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+        }
+
+        function compileShader(type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                const info = gl.getShaderInfoLog(shader);
+                gl.deleteShader(shader);
+                throw new Error(info);
+            }
+            return shader;
+        }
+
+        function createProgram(vertSrc, fragSrc) {
+            const vs = compileShader(gl.VERTEX_SHADER, vertSrc);
+            const fs = compileShader(gl.FRAGMENT_SHADER, fragSrc);
+            const prog = gl.createProgram();
+            gl.attachShader(prog, vs);
+            gl.attachShader(prog, fs);
+            gl.linkProgram(prog);
+            if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+                throw new Error(gl.getProgramInfoLog(prog));
+            }
+            return prog;
+        }
+
+        function compileUserShader(code) {
+            const start = performance.now();
+            try {
+                const newProg = createProgram(vertexShader, wrapShader(code));
+                if (program) gl.deleteProgram(program);
+                program = newProg;
+                gl.useProgram(program);
+                const posLoc = gl.getAttribLocation(program, 'a_position');
+                gl.enableVertexAttribArray(posLoc);
+                gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+                uniformLocations = {
+                    iResolution: gl.getUniformLocation(program, 'iResolution'),
+                    iTime: gl.getUniformLocation(program, 'iTime'),
+                    iFrame: gl.getUniformLocation(program, 'iFrame'),
+                };
+                compileCount++;
+                const elapsed = performance.now() - start;
+                compileTimes.push(elapsed);
+                return { success: true, time: elapsed };
+            } catch (e) {
+                errorCount++;
+                return { success: false, error: e.message, time: performance.now() - start };
+            }
+        }
+
+        function setResolution(width, height) {
+            canvas.width = width;
+            canvas.height = height;
+            gl.viewport(0, 0, width, height);
+            document.getElementById('resValue').textContent = `${width}x${height}`;
+        }
+
+        function render() {
+            if (!program) return;
+            const time = (performance.now() - startTime) / 1000;
+            gl.uniform3f(uniformLocations.iResolution, canvas.width, canvas.height, 1.0);
+            gl.uniform1f(uniformLocations.iTime, time);
+            gl.uniform1i(uniformLocations.iFrame, frameCount);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            drawCalls++;
+            frameCount++;
+        }
+
+        // ==================== Logging ====================
+        function log(message, type = 'info') {
+            const logPanel = document.getElementById('logPanel');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logPanel.appendChild(entry);
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+
+        function updateStats() {
+            document.getElementById('drawCalls').textContent = drawCalls;
+            document.getElementById('compileCount').textContent = compileCount;
+            document.getElementById('errorCount').textContent = errorCount;
+            if (compileTimes.length > 0) {
+                const avg = compileTimes.reduce((a, b) => a + b, 0) / compileTimes.length;
+                document.getElementById('avgCompileTime').textContent = avg.toFixed(2);
+            }
+            if (performance.memory) {
+                const mb = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
+                document.getElementById('memoryUsage').textContent = `${mb} MB`;
+            }
+        }
+
+        function setProgress(percent) {
+            document.getElementById('progressFill').style.width = `${percent}%`;
+        }
+
+        function addResult(test, result, details) {
+            const tbody = document.querySelector('#resultsTable tbody');
+            const row = document.createElement('tr');
+            const resultClass = result === 'PASS' ? 'success' : (result === 'WARN' ? 'warning' : 'error');
+            row.innerHTML = `<td>${test}</td><td class="${resultClass}">${result}</td><td>${details}</td>`;
+            tbody.appendChild(row);
+            document.getElementById('resultsPanel').style.display = 'block';
+        }
+
+        // ==================== Tests ====================
+        async function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function runFpsTest(shaderName, shader, duration = 3000) {
+            log(`Testing ${shaderName} shader for ${duration}ms...`);
+            const result = compileUserShader(shader);
+            if (!result.success) {
+                return { fps: 0, frameTime: Infinity, error: result.error };
+            }
+
+            const frames = [];
+            const startTest = performance.now();
+            let lastFrame = startTest;
+
+            while (performance.now() - startTest < duration && isRunning) {
+                const now = performance.now();
+                const delta = now - lastFrame;
+                lastFrame = now;
+                frames.push(delta);
+                render();
+                await sleep(0); // Yield to browser
+            }
+
+            const avgFrameTime = frames.reduce((a, b) => a + b, 0) / frames.length;
+            const fps = 1000 / avgFrameTime;
+            return { fps, frameTime: avgFrameTime, frames: frames.length };
+        }
+
+        async function testGpuStress() {
+            log('=== GPU Stress Test ===', 'info');
+            const results = {};
+
+            for (const [name, shader] of Object.entries(TEST_SHADERS)) {
+                if (name === 'invalid') continue;
+                if (!isRunning) break;
+
+                setProgress(Object.keys(results).length / 4 * 25);
+                const result = await runFpsTest(name, shader, 3000);
+                results[name] = result;
+
+                if (result.error) {
+                    log(`${name}: FAILED - ${result.error}`, 'error');
+                } else {
+                    const status = result.fps >= 30 ? 'success' : (result.fps >= 15 ? 'warning' : 'error');
+                    log(`${name}: ${result.fps.toFixed(1)} FPS, ${result.frameTime.toFixed(2)}ms/frame`, status);
+                }
+                document.getElementById('fpsValue').textContent = result.fps?.toFixed(1) || '--';
+                document.getElementById('frameTimeValue').textContent = result.frameTime?.toFixed(2) || '--';
+            }
+
+            // Evaluate results
+            if (results.simple?.fps >= 60) {
+                addResult('Simple Shader', 'PASS', `${results.simple.fps.toFixed(1)} FPS`);
+            } else {
+                addResult('Simple Shader', 'FAIL', `${results.simple?.fps?.toFixed(1) || 0} FPS (expected 60+)`);
+            }
+
+            if (results.heavy?.fps >= 30) {
+                addResult('Heavy Shader', 'PASS', `${results.heavy.fps.toFixed(1)} FPS`);
+            } else if (results.heavy?.fps >= 15) {
+                addResult('Heavy Shader', 'WARN', `${results.heavy.fps.toFixed(1)} FPS (expected 30+)`);
+            } else {
+                addResult('Heavy Shader', 'FAIL', `${results.heavy?.fps?.toFixed(1) || 0} FPS`);
+            }
+
+            if (results.extreme?.fps >= 15) {
+                addResult('Extreme Shader', 'PASS', `${results.extreme.fps.toFixed(1)} FPS`);
+            } else {
+                addResult('Extreme Shader', 'WARN', `${results.extreme?.fps?.toFixed(1) || 0} FPS (GPU limited)`);
+            }
+
+            return results;
+        }
+
+        async function testCompileSpeed() {
+            log('=== Compile Speed Test ===', 'info');
+            const iterations = 50;
+            const times = [];
+
+            for (let i = 0; i < iterations && isRunning; i++) {
+                setProgress(25 + (i / iterations) * 25);
+                const result = compileUserShader(TEST_SHADERS.medium);
+                times.push(result.time);
+                await sleep(10);
+            }
+
+            const avg = times.reduce((a, b) => a + b, 0) / times.length;
+            const max = Math.max(...times);
+            const min = Math.min(...times);
+
+            log(`Compiled ${iterations} times: avg=${avg.toFixed(2)}ms, min=${min.toFixed(2)}ms, max=${max.toFixed(2)}ms`, 'success');
+
+            if (avg < 50) {
+                addResult('Compile Speed', 'PASS', `Avg: ${avg.toFixed(2)}ms`);
+            } else if (avg < 100) {
+                addResult('Compile Speed', 'WARN', `Avg: ${avg.toFixed(2)}ms (expected <50ms)`);
+            } else {
+                addResult('Compile Speed', 'FAIL', `Avg: ${avg.toFixed(2)}ms (too slow)`);
+            }
+
+            // Test error handling
+            log('Testing error handling...');
+            const errorResult = compileUserShader(TEST_SHADERS.invalid);
+            if (!errorResult.success) {
+                addResult('Error Handling', 'PASS', 'Invalid shader rejected correctly');
+                log('Invalid shader rejected correctly', 'success');
+            } else {
+                addResult('Error Handling', 'FAIL', 'Invalid shader was not rejected');
+            }
+
+            return { avg, min, max };
+        }
+
+        async function testResolutionScaling() {
+            log('=== Resolution Scaling Test ===', 'info');
+            const resolutions = [
+                [320, 180],
+                [640, 360],
+                [1280, 720],
+                [1920, 1080],
+                [2560, 1440],
+                [3840, 2160],
+            ];
+
+            compileUserShader(TEST_SHADERS.medium);
+            const results = [];
+
+            for (let i = 0; i < resolutions.length && isRunning; i++) {
+                const [w, h] = resolutions[i];
+                setProgress(50 + (i / resolutions.length) * 25);
+                setResolution(w, h);
+                log(`Testing ${w}x${h}...`);
+
+                const frames = [];
+                const start = performance.now();
+                while (performance.now() - start < 1000 && isRunning) {
+                    const frameStart = performance.now();
+                    render();
+                    frames.push(performance.now() - frameStart);
+                    await sleep(0);
+                }
+
+                const avgFrameTime = frames.reduce((a, b) => a + b, 0) / frames.length;
+                const fps = 1000 / avgFrameTime;
+                results.push({ resolution: `${w}x${h}`, fps, frameTime: avgFrameTime });
+                log(`${w}x${h}: ${fps.toFixed(1)} FPS`, fps >= 30 ? 'success' : 'warning');
+            }
+
+            // Reset to reasonable resolution
+            setResolution(800, 450);
+
+            // Check scaling is roughly linear (not worse than O(n) with pixel count)
+            if (results.length >= 2) {
+                const scalingFactor = (results[results.length - 1].frameTime / results[0].frameTime);
+                const pixelRatio = (resolutions[resolutions.length - 1][0] * resolutions[resolutions.length - 1][1]) /
+                                   (resolutions[0][0] * resolutions[0][1]);
+                const efficiency = pixelRatio / scalingFactor;
+
+                if (efficiency > 0.5) {
+                    addResult('Resolution Scaling', 'PASS', `Efficiency: ${(efficiency * 100).toFixed(0)}%`);
+                } else {
+                    addResult('Resolution Scaling', 'WARN', `Efficiency: ${(efficiency * 100).toFixed(0)}% (sublinear)`);
+                }
+            }
+
+            return results;
+        }
+
+        async function testMemory() {
+            log('=== Memory Test ===', 'info');
+            const iterations = 100;
+
+            if (!performance.memory) {
+                log('Memory API not available (Chrome only)', 'warning');
+                addResult('Memory Test', 'WARN', 'API not available');
+                return;
+            }
+
+            const initialMemory = performance.memory.usedJSHeapSize;
+            log(`Initial memory: ${(initialMemory / 1024 / 1024).toFixed(2)} MB`);
+
+            // Rapidly compile shaders to check for memory leaks
+            for (let i = 0; i < iterations && isRunning; i++) {
+                setProgress(75 + (i / iterations) * 25);
+                compileUserShader(TEST_SHADERS.heavy);
+                if (i % 10 === 0) {
+                    render();
+                    await sleep(0);
+                }
+            }
+
+            // Force GC if available
+            if (window.gc) window.gc();
+            await sleep(100);
+
+            const finalMemory = performance.memory.usedJSHeapSize;
+            const leaked = (finalMemory - initialMemory) / 1024 / 1024;
+
+            log(`Final memory: ${(finalMemory / 1024 / 1024).toFixed(2)} MB`);
+            log(`Delta: ${leaked.toFixed(2)} MB after ${iterations} recompiles`);
+
+            if (leaked < 10) {
+                addResult('Memory Leaks', 'PASS', `+${leaked.toFixed(2)} MB`);
+            } else if (leaked < 50) {
+                addResult('Memory Leaks', 'WARN', `+${leaked.toFixed(2)} MB`);
+            } else {
+                addResult('Memory Leaks', 'FAIL', `+${leaked.toFixed(2)} MB (significant leak)`);
+            }
+
+            return { initial: initialMemory, final: finalMemory, leaked };
+        }
+
+        async function runAllTests() {
+            document.querySelector('#resultsTable tbody').innerHTML = '';
+            isRunning = true;
+            setButtonState(true);
+            log('Starting all tests...', 'info');
+
+            await testGpuStress();
+            if (isRunning) await testCompileSpeed();
+            if (isRunning) await testResolutionScaling();
+            if (isRunning) await testMemory();
+
+            setProgress(100);
+            log('All tests completed!', 'success');
+            updateStats();
+            setButtonState(false);
+            isRunning = false;
+        }
+
+        function setButtonState(running) {
+            document.querySelectorAll('.controls button:not(#stopBtn)').forEach(b => b.disabled = running);
+            document.getElementById('stopBtn').disabled = !running;
+            if (running) {
+                document.getElementById('runAllBtn').classList.add('running');
+            } else {
+                document.getElementById('runAllBtn').classList.remove('running');
+            }
+        }
+
+        function stopTests() {
+            isRunning = false;
+            log('Tests stopped by user', 'warning');
+            setButtonState(false);
+        }
+
+        // ==================== Context Loss Handling ====================
+        canvas.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            document.getElementById('contextLost').textContent = 'YES';
+            document.getElementById('contextLost').className = 'value error';
+            log('WebGL context lost!', 'error');
+            addResult('Context Stability', 'FAIL', 'Context was lost during test');
+        });
+
+        canvas.addEventListener('webglcontextrestored', () => {
+            log('WebGL context restored', 'warning');
+            setupGeometry();
+        });
+
+        // ==================== Initialization ====================
+        setupGeometry();
+        setResolution(800, 450);
+        compileUserShader(TEST_SHADERS.simple);
+
+        // Animation loop for live preview
+        function animate() {
+            render();
+            const now = performance.now();
+            fpsHistory.push(now);
+            while (fpsHistory.length > 0 && fpsHistory[0] < now - 1000) fpsHistory.shift();
+            document.getElementById('fpsValue').textContent = fpsHistory.length;
+            animationId = requestAnimationFrame(animate);
+        }
+        animate();
+
+        // Event listeners
+        document.getElementById('runAllBtn').addEventListener('click', runAllTests);
+        document.getElementById('runGpuBtn').addEventListener('click', async () => {
+            isRunning = true;
+            setButtonState(true);
+            await testGpuStress();
+            setButtonState(false);
+            isRunning = false;
+        });
+        document.getElementById('runMemoryBtn').addEventListener('click', async () => {
+            isRunning = true;
+            setButtonState(true);
+            await testMemory();
+            setButtonState(false);
+            isRunning = false;
+        });
+        document.getElementById('runCompileBtn').addEventListener('click', async () => {
+            isRunning = true;
+            setButtonState(true);
+            await testCompileSpeed();
+            setButtonState(false);
+            isRunning = false;
+        });
+        document.getElementById('runResolutionBtn').addEventListener('click', async () => {
+            isRunning = true;
+            setButtonState(true);
+            await testResolutionScaling();
+            setButtonState(false);
+            isRunning = false;
+        });
+        document.getElementById('stopBtn').addEventListener('click', stopTests);
+
+        log('Stress test ready. Click "Run All Tests" to begin.', 'info');
+    </script>
+</body>
+</html>
