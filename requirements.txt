@@ -1,0 +1,2 @@
+# Optional dependencies for terminal feature
+websockets>=12.0
