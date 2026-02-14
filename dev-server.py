@@ -19,6 +19,7 @@ import base64
 import argparse
 import threading
 import asyncio
+import subprocess
 import pty
 import struct
 import fcntl
@@ -255,37 +256,28 @@ async def terminal_handler(websocket):
     """Handle WebSocket connection for interactive terminal."""
     print(f"Terminal connected: {websocket.remote_address}")
 
-    # Create PTY
+    # Create PTY and spawn shell using subprocess
     master_fd, slave_fd = pty.openpty()
 
-    # Start shell
     shell = os.environ.get('SHELL', '/bin/bash')
-    pid = os.fork()
+    env = os.environ.copy()
+    env['TERM'] = 'xterm-256color'
 
-    if pid == 0:
-        # Child process
-        os.close(master_fd)
-        os.setsid()
-        os.dup2(slave_fd, 0)
-        os.dup2(slave_fd, 1)
-        os.dup2(slave_fd, 2)
-        os.close(slave_fd)
-
-        # Set TERM environment
-        env = os.environ.copy()
-        env['TERM'] = 'xterm-256color'
-
-        os.execvpe(shell, [shell], env)
-
-    # Parent process
+    # Use subprocess.Popen instead of os.fork() to avoid deadlocks
+    process = subprocess.Popen(
+        [shell],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        env=env,
+        preexec_fn=os.setsid
+    )
     os.close(slave_fd)
 
     async def read_pty():
         """Read output from PTY and send to websocket."""
-        loop = asyncio.get_event_loop()
-        while True:
+        while process.poll() is None:
             try:
-                # Check if data available
                 r, _, _ = select.select([master_fd], [], [], 0.1)
                 if r:
                     data = os.read(master_fd, 4096)
@@ -322,12 +314,11 @@ async def terminal_handler(websocket):
         print(f"Terminal disconnected: {websocket.remote_address}")
         read_task.cancel()
         os.close(master_fd)
-        # Kill child process
+        process.terminate()
         try:
-            os.kill(pid, 9)
-            os.waitpid(pid, 0)
-        except OSError:
-            pass
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
 
 async def run_websocket_server(port):

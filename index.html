@@ -974,7 +974,9 @@ void main() {
         }
 
         function openProdWindow() {
-            prodWindow = window.open('viewer.html?mode=prod', 'shader-prod',
+            const prodUrl = new URL('viewer.html', location.href);
+            prodUrl.searchParams.set('mode', 'prod');
+            prodWindow = window.open(prodUrl.href, 'shader-prod',
                 'width=1280,height=720,menubar=no,toolbar=no,location=no');
         }
 
