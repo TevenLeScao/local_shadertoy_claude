@@ -205,8 +205,9 @@ class DevServerHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         # Quieter logging
-        if "/api/events" not in args[0]:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] {args[0]}")
+        msg = format % args if args else format
+        if "/api/events" not in msg:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 
 def notify_clients(event, data):
@@ -331,7 +332,7 @@ async def terminal_handler(websocket):
 
 async def run_websocket_server(port):
     """Run WebSocket server for terminal."""
-    async with ws_serve(terminal_handler, "localhost", port):
+    async with ws_serve(terminal_handler, "0.0.0.0", port):
         print(f"WebSocket terminal on ws://localhost:{port}")
         await asyncio.Future()  # Run forever
 
