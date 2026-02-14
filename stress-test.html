@@ -485,29 +485,56 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
+        // Uncapped render loop for true GPU benchmarking
+        // Uses a tight loop with gl.finish() to measure actual GPU time
         async function runFpsTest(shaderName, shader, duration = 3000) {
-            log(`Testing ${shaderName} shader for ${duration}ms...`);
+            log(`Testing ${shaderName} shader for ${duration}ms (uncapped)...`);
             const result = compileUserShader(shader);
             if (!result.success) {
                 return { fps: 0, frameTime: Infinity, error: result.error };
             }
 
-            const frames = [];
+            const frameTimes = [];
             const startTest = performance.now();
-            let lastFrame = startTest;
+            let framesDone = 0;
 
+            // Run uncapped for the duration
             while (performance.now() - startTest < duration && isRunning) {
-                const now = performance.now();
-                const delta = now - lastFrame;
-                lastFrame = now;
-                frames.push(delta);
+                const frameStart = performance.now();
+
                 render();
-                await sleep(0); // Yield to browser
+
+                // gl.finish() forces GPU to complete all commands
+                // This gives us accurate frame timing instead of just queue time
+                gl.finish();
+
+                const frameEnd = performance.now();
+                frameTimes.push(frameEnd - frameStart);
+                framesDone++;
+
+                // Yield every 100 frames to keep UI responsive
+                if (framesDone % 100 === 0) {
+                    await sleep(0);
+                }
             }
 
-            const avgFrameTime = frames.reduce((a, b) => a + b, 0) / frames.length;
-            const fps = 1000 / avgFrameTime;
-            return { fps, frameTime: avgFrameTime, frames: frames.length };
+            const totalTime = performance.now() - startTest;
+            const avgFrameTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+            const fps = framesDone / (totalTime / 1000);
+
+            // Calculate percentiles for stability analysis
+            const sorted = [...frameTimes].sort((a, b) => a - b);
+            const p99 = sorted[Math.floor(sorted.length * 0.99)] || avgFrameTime;
+            const p1 = sorted[Math.floor(sorted.length * 0.01)] || avgFrameTime;
+
+            return {
+                fps,
+                frameTime: avgFrameTime,
+                frames: framesDone,
+                p99,
+                p1,
+                stability: (p1 / p99) * 100  // Higher = more stable
+            };
         }
 
         async function testGpuStress() {
@@ -525,32 +552,48 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
                 if (result.error) {
                     log(`${name}: FAILED - ${result.error}`, 'error');
                 } else {
-                    const status = result.fps >= 30 ? 'success' : (result.fps >= 15 ? 'warning' : 'error');
-                    log(`${name}: ${result.fps.toFixed(1)} FPS, ${result.frameTime.toFixed(2)}ms/frame`, status);
+                    const status = result.fps >= 60 ? 'success' : (result.fps >= 30 ? 'warning' : 'error');
+                    log(`${name}: ${result.fps.toFixed(1)} FPS (uncapped), ${result.frameTime.toFixed(2)}ms/frame, stability: ${result.stability?.toFixed(0) || '--'}%`, status);
                 }
                 document.getElementById('fpsValue').textContent = result.fps?.toFixed(1) || '--';
                 document.getElementById('frameTimeValue').textContent = result.frameTime?.toFixed(2) || '--';
             }
 
-            // Evaluate results
-            if (results.simple?.fps >= 60) {
-                addResult('Simple Shader', 'PASS', `${results.simple.fps.toFixed(1)} FPS`);
+            // Evaluate results (uncapped - expect much higher than 60 for simple shaders)
+            if (results.simple?.fps >= 500) {
+                addResult('Simple Shader', 'PASS', `${results.simple.fps.toFixed(0)} FPS (uncapped)`);
+            } else if (results.simple?.fps >= 200) {
+                addResult('Simple Shader', 'WARN', `${results.simple.fps.toFixed(0)} FPS (expected 500+)`);
             } else {
-                addResult('Simple Shader', 'FAIL', `${results.simple?.fps?.toFixed(1) || 0} FPS (expected 60+)`);
+                addResult('Simple Shader', 'FAIL', `${results.simple?.fps?.toFixed(0) || 0} FPS (expected 500+)`);
             }
 
-            if (results.heavy?.fps >= 30) {
-                addResult('Heavy Shader', 'PASS', `${results.heavy.fps.toFixed(1)} FPS`);
-            } else if (results.heavy?.fps >= 15) {
-                addResult('Heavy Shader', 'WARN', `${results.heavy.fps.toFixed(1)} FPS (expected 30+)`);
+            if (results.heavy?.fps >= 60) {
+                addResult('Heavy Shader', 'PASS', `${results.heavy.fps.toFixed(0)} FPS (uncapped)`);
+            } else if (results.heavy?.fps >= 30) {
+                addResult('Heavy Shader', 'WARN', `${results.heavy.fps.toFixed(0)} FPS (expected 60+)`);
             } else {
-                addResult('Heavy Shader', 'FAIL', `${results.heavy?.fps?.toFixed(1) || 0} FPS`);
+                addResult('Heavy Shader', 'FAIL', `${results.heavy?.fps?.toFixed(0) || 0} FPS`);
             }
 
-            if (results.extreme?.fps >= 15) {
-                addResult('Extreme Shader', 'PASS', `${results.extreme.fps.toFixed(1)} FPS`);
+            if (results.extreme?.fps >= 30) {
+                addResult('Extreme Shader', 'PASS', `${results.extreme.fps.toFixed(0)} FPS (uncapped)`);
+            } else if (results.extreme?.fps >= 15) {
+                addResult('Extreme Shader', 'WARN', `${results.extreme.fps.toFixed(0)} FPS (GPU limited)`);
             } else {
-                addResult('Extreme Shader', 'WARN', `${results.extreme?.fps?.toFixed(1) || 0} FPS (GPU limited)`);
+                addResult('Extreme Shader', 'FAIL', `${results.extreme?.fps?.toFixed(0) || 0} FPS (GPU limited)`);
+            }
+
+            // Frame time stability check
+            const avgStability = [results.simple, results.medium, results.heavy, results.extreme]
+                .filter(r => r?.stability)
+                .reduce((sum, r) => sum + r.stability, 0) / 4;
+            if (avgStability >= 80) {
+                addResult('Frame Stability', 'PASS', `${avgStability.toFixed(0)}% consistent`);
+            } else if (avgStability >= 50) {
+                addResult('Frame Stability', 'WARN', `${avgStability.toFixed(0)}% (some variance)`);
+            } else {
+                addResult('Frame Stability', 'FAIL', `${avgStability.toFixed(0)}% (high variance)`);
             }
 
             return results;
