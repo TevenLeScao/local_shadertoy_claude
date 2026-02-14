@@ -166,6 +166,45 @@
             padding: 0 10px 5px 10px;
             background: #2d2d2d;
         }
+
+        .prod-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+            padding-left: 10px;
+            border-left: 1px solid #444;
+        }
+
+        .prod-status {
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: #472a1a;
+            color: #ff8800;
+        }
+
+        .prod-status.connected {
+            background: #1a472a;
+            color: #00ff88;
+        }
+
+        #pushToProdBtn {
+            background: #555;
+        }
+
+        #pushToProdBtn:not(:disabled) {
+            background: #28a745;
+        }
+
+        #pushToProdBtn:not(:disabled):hover {
+            background: #34ce57;
+        }
+
+        #pushToProdBtn:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
     </style>
 </head>
 <body>
@@ -182,6 +221,11 @@
                     <option value="tunnel">Infinite Tunnel</option>
                     <option value="ocean">Ocean Waves</option>
                 </select>
+                <div class="prod-controls">
+                    <button id="openProdBtn">Open Prod</button>
+                    <button id="pushToProdBtn" disabled>Push to Prod</button>
+                    <span id="prodStatus" class="prod-status">Disconnected</span>
+                </div>
                 <div class="stats">
                     <span id="fpsDisplay">FPS: 0</span> |
                     <span id="timeDisplay">Time: 0.00s</span> |
@@ -809,7 +853,87 @@ void main() {
             }
         });
 
+        // ==================== Prod Window Communication ====================
+        const prodChannel = new BroadcastChannel('shader-prod-channel');
+        let prodConnected = false;
+        let prodWindow = null;
+        let lastPongTime = 0;
+        const PONG_TIMEOUT = 3000;
+
+        function updateProdStatus(connected) {
+            prodConnected = connected;
+            const statusEl = document.getElementById('prodStatus');
+            const pushBtn = document.getElementById('pushToProdBtn');
+
+            if (connected) {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'prod-status connected';
+                pushBtn.disabled = false;
+            } else {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'prod-status';
+                pushBtn.disabled = true;
+            }
+        }
+
+        function openProdWindow() {
+            prodWindow = window.open('viewer.html?mode=prod', 'shader-prod',
+                'width=1280,height=720,menubar=no,toolbar=no,location=no');
+        }
+
+        function pushToProd() {
+            if (!prodConnected) return;
+
+            const code = editor.getValue();
+            prodChannel.postMessage({
+                type: 'PUSH_SHADER',
+                payload: {
+                    code: code,
+                    name: 'dev-push',
+                    timestamp: Date.now()
+                }
+            });
+
+            // Visual feedback
+            const pushBtn = document.getElementById('pushToProdBtn');
+            const originalText = pushBtn.textContent;
+            pushBtn.textContent = 'Pushed!';
+            setTimeout(() => { pushBtn.textContent = originalText; }, 1000);
+        }
+
+        // Listen for responses from prod window
+        prodChannel.onmessage = (event) => {
+            const { type } = event.data;
+            if (type === 'PONG') {
+                lastPongTime = Date.now();
+                updateProdStatus(true);
+            }
+        };
+
+        // Ping prod window periodically
+        setInterval(() => {
+            prodChannel.postMessage({ type: 'PING', payload: { timestamp: Date.now() } });
+
+            // Check for timeout
+            if (prodConnected && Date.now() - lastPongTime > PONG_TIMEOUT) {
+                updateProdStatus(false);
+            }
+        }, 1000);
+
+        // Event listeners for prod controls
+        document.getElementById('openProdBtn').addEventListener('click', openProdWindow);
+        document.getElementById('pushToProdBtn').addEventListener('click', pushToProd);
+
+        // Keyboard shortcut: Cmd/Ctrl+Shift+P to push to prod
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
+                e.preventDefault();
+                pushToProd();
+            }
+        });
+
         // Initialize
+        updateProdStatus(false);
         setupGeometry();
         compileUserShader(editor.getValue());
         render();

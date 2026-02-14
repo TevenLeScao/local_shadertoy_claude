@@ -509,11 +509,66 @@ void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }`;
             startTime = performance.now() - newTime * 1000;
         });
 
+        // ==================== Prod Mode (BroadcastChannel) ====================
+        const urlParams = new URLSearchParams(window.location.search);
+        const isProdMode = urlParams.get('mode') === 'prod';
+
+        let prodChannel = null;
+
+        if (isProdMode) {
+            document.title = 'Shader Prod Display';
+            prodChannel = new BroadcastChannel('shader-prod-channel');
+
+            // Respond to pings from dev window
+            prodChannel.onmessage = (event) => {
+                const { type, payload } = event.data;
+
+                if (type === 'PING') {
+                    prodChannel.postMessage({
+                        type: 'PONG',
+                        payload: {
+                            timestamp: Date.now(),
+                            isPlaying: isPlaying,
+                            time: pausedTime
+                        }
+                    });
+                }
+
+                if (type === 'PUSH_SHADER') {
+                    const result = compileUserShader(payload.code);
+
+                    if (result.success) {
+                        currentShader = payload.name || 'pushed';
+                        document.getElementById('shaderName').textContent = 'Pushed from Dev';
+                        showNotification('Shader pushed from dev');
+
+                        // Reset time on new shader push
+                        startTime = performance.now();
+                        pausedTime = 0;
+                        frame = 0;
+                    } else {
+                        showNotification(`Compile error: ${result.error}`, true);
+                    }
+                }
+            };
+
+            // Update UI to indicate prod mode
+            document.getElementById('connectionStatus').textContent = 'Prod Mode';
+            document.getElementById('statusDot').className = 'status-dot connected';
+
+            // Hide shader selector in prod mode (not needed)
+            document.getElementById('shaderSelect').style.display = 'none';
+        }
+
         // ==================== Initialization ====================
         setupGeometry();
         setResolution(1280, 720);
-        populateShaderList();
-        connectSSE();
+
+        if (!isProdMode) {
+            populateShaderList();
+            connectSSE();
+        }
+
         render();
     </script>
 </body>
